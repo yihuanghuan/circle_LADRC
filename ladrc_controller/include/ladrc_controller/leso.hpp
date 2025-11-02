@@ -9,8 +9,7 @@ namespace ladrc_controller
 
 /**
  * @brief Linear Extended State Observer (LESO)
- * 
- * Second-order LESO for disturbance estimation:
+ * * Second-order LESO for disturbance estimation:
  * State vector: [z1, z2, z3]^T
  * z1: estimated position
  * z2: estimated velocity
@@ -42,13 +41,17 @@ public:
 
 private:
   Eigen::Vector3d z_;      // State vector [z1, z2, z3]
-  Eigen::Matrix3d A_;      // System matrix
-  Eigen::Vector3d B_;      // Input matrix
-  Eigen::Vector3d L_;      // Observer gain
-  
+
+  // <--- 修正：移除了 A_, B_, L_ 矩阵，替换为标准算法的增益
   double omega_o_;         // Observer bandwidth
   double b0_;              // Control gain
   double dt_;              // Sampling time
+  
+  // Observer gains
+  double beta1_;
+  double beta2_;
+  double beta3_;
+  // --- 修正结束 ---
   
   void updateMatrices();
 };

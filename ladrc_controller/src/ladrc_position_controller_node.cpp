@@ -8,6 +8,7 @@
 #include <px4_msgs/msg/vehicle_control_mode.hpp>
 
 #include "ladrc_controller/ladrc_core.hpp"
+#include <cmath> // <--- 修正1：添加头文件
 
 class LADRCPositionControllerNode : public rclcpp::Node
 {
@@ -43,8 +44,9 @@ public:
       "/reference_pose", 10,
       std::bind(&LADRCPositionControllerNode::referenceCallback, this, std::placeholders::_1));
 
+    // <--- 修正2：更改订阅的里程计话题
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-      "/odom", 10,
+      "/fmu/out/vehicle_odometry", 10,
       std::bind(&LADRCPositionControllerNode::odomCallback, this, std::placeholders::_1));
 
     // Publishers
@@ -142,8 +144,21 @@ private:
     double vy_cmd = ladrc_y_->update(y_ref, y);
     double az_cmd = ladrc_z_->update(z_ref, z);
 
+    // <--- 修正3：正确计算航向角 (Yaw)
+    // 1. 从参考位姿的四元数中提取ENU（ROS标准）航向角
+    double qz = reference_pose_.pose.orientation.z;
+    double qw = reference_pose_.pose.orientation.w;
+    // atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))，对于2D（仅yaw）可简化
+    double yaw_enu = 2.0 * std::atan2(qz, qw); 
+    
+    // 2. 将ENU航向角转换为PX4所需的NED航向角
+    //    yaw_NED = -yaw_ENU + PI/2
+    double yaw_ned = -yaw_enu + M_PI / 2.0;
+    // --- 修正结束 ---
+
     // Publish trajectory setpoint
-    publishTrajectorySetpoint(vx_cmd, vy_cmd, az_cmd, z_ref);
+    // <--- 修正4：将计算得到的 yaw_ned 传递给发布函数
+    publishTrajectorySetpoint(vx_cmd, vy_cmd, az_cmd, yaw_ned);
 
     // Log control info
     if (++log_counter_ >= 50) {  // Log every second at 50Hz
@@ -160,22 +175,27 @@ private:
     msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
     msg.position = false;
     msg.velocity = true;
-    msg.acceleration = false;
+    // <--- 修正5：启用加速度控制（用于Z轴）
+    msg.acceleration = true; 
     msg.attitude = false;
     msg.body_rate = false;
     
     offboard_mode_pub_->publish(msg);
   }
 
-  void publishTrajectorySetpoint(double vx, double vy, double az, double z_ref)
+  // <--- 修正6：修改函数签名以接收 yaw_ref
+  void publishTrajectorySetpoint(double vx, double vy, double az, double yaw_ref)
   {
     px4_msgs::msg::TrajectorySetpoint msg{};
     msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
     
-    msg.position = {NAN, NAN, static_cast<float>(-z_ref)};  // NED frame
+    // <--- 修正7：Z轴不发送位置，因为我们发送的是加速度
+    msg.position = {NAN, NAN, NAN}; 
     msg.velocity = {static_cast<float>(vx), static_cast<float>(vy), NAN};
-    msg.acceleration = {NAN, NAN, static_cast<float>(-az)};
-    msg.yaw = reference_pose_.pose.orientation.z;
+    msg.acceleration = {NAN, NAN, static_cast<float>(-az)}; // NED frame
+    
+    // <--- 修正8：使用计算出的NED航向角
+    msg.yaw = static_cast<float>(yaw_ref);
     
     trajectory_pub_->publish(msg);
   }

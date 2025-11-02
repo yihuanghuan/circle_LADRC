@@ -17,15 +17,23 @@ LESO::LESO(double omega_o, double b0, double dt)
   updateMatrices();
 }
 
+// <--- 修正：使用标准的离散LESO算法替换原实现
 void LESO::update(double y, double u)
 {
-  // Prediction step
-  Eigen::Vector3d z_pred = A_ * z_ + B_ * u;
-  
-  // Correction step
-  double innovation = y - z_pred(0);
-  z_ = z_pred + L_ * innovation;
+  // 标准离散时间 LESO (欧拉法)
+  double e = y - z_(0); // 估计误差
+
+  // 存储上一时刻的状态
+  double z1 = z_(0);
+  double z2 = z_(1);
+  double z3 = z_(2);
+
+  // 更新状态
+  z_(0) = z1 + dt_ * (z2 - beta1_ * e);
+  z_(1) = z2 + dt_ * (z3 + b0_ * u - beta2_ * e);
+  z_(2) = z3 + dt_ * (-beta3_ * e);
 }
+// --- 修正结束 ---
 
 void LESO::reset()
 {
@@ -41,13 +49,14 @@ void LESO::setObserverBandwidth(double omega_o)
 void LESO::setControlGain(double b0)
 {
   b0_ = b0;
-  updateMatrices();
+  // 注意：在标准LESO中，b0只在update中使用，不在updateMatrices中使用
+  // updateMatrices(); // 原始代码中这一行是不必要的
 }
 
 void LESO::setSamplingTime(double dt)
 {
   dt_ = dt;
-  updateMatrices();
+  // updateMatrices(); // 原始代码中这一行是不必要的
 }
 
 std::vector<double> LESO::getStates() const
@@ -55,30 +64,16 @@ std::vector<double> LESO::getStates() const
   return {z_(0), z_(1), z_(2)};
 }
 
+// <--- 修正：updateMatrices 只计算 beta 增益
 void LESO::updateMatrices()
 {
   // Observer gain using Butterworth pole placement
-  double beta1 = 3.0 * omega_o_;
-  double beta2 = 3.0 * omega_o_ * omega_o_;
-  double beta3 = omega_o_ * omega_o_ * omega_o_;
+  beta1_ = 3.0 * omega_o_;
+  beta2_ = 3.0 * omega_o_ * omega_o_;
+  beta3_ = omega_o_ * omega_o_ * omega_o_;
   
-  L_ << beta1, beta2, beta3;
-  
-  // Discrete-time system matrices (using Euler integration)
-  A_ << 1.0,     dt_,      0.0,
-        0.0,     1.0,      dt_,
-        0.0,     0.0,      1.0;
-  
-  A_(0, 0) -= dt_ * beta1;
-  A_(0, 1) -= dt_ * beta2;
-  A_(0, 2) -= dt_ * beta3;
-  A_(1, 0) -= dt_ * beta2;
-  A_(1, 1) -= dt_ * beta3;
-  A_(2, 0) -= dt_ * beta3;
-  
-  B_ << dt_ * b0_ - dt_ * dt_ * beta1 * b0_,
-        dt_ * dt_ * b0_ - dt_ * dt_ * beta2 * b0_,
-        -dt_ * dt_ * beta3 * b0_;
+  // 移除了所有 A_ 和 B_ 矩阵的计算
 }
+// --- 修正结束 ---
 
 }  // namespace ladrc_controller
