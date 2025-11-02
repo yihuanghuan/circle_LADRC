@@ -17,11 +17,18 @@ LESO::LESO(double omega_o, double b0, double dt)
   updateMatrices();
 }
 
-// <--- 修正：使用标准的离散LESO算法替换原实现
+// <--- 修正：修复LESO稳定性问题
+// 原始实现中 beta 增益项的符号是错误的，导致观测器发散。
+// z_dot = A*z + B*u + L*e  其中 e = y - z1
+// z1_dot = z2 + L1*e
+// z2_dot = z3 + b0*u + L2*e
+// z3_dot = L3*e
+// 这里的 L1, L2, L3 就是 beta1, beta2, beta3。
+// 它们应该是正号，以修正 (y - z1) 的误差。
 void LESO::update(double y, double u)
 {
   // 标准离散时间 LESO (欧拉法)
-  double e = y - z_(0); // 估计误差
+  double e = y - z_(0); // 估计误差 (y - z1)
 
   // 存储上一时刻的状态
   double z1 = z_(0);
@@ -29,9 +36,9 @@ void LESO::update(double y, double u)
   double z3 = z_(2);
 
   // 更新状态
-  z_(0) = z1 + dt_ * (z2 - beta1_ * e);
-  z_(1) = z2 + dt_ * (z3 + b0_ * u - beta2_ * e);
-  z_(2) = z3 + dt_ * (-beta3_ * e);
+  z_(0) = z1 + dt_ * (z2 + beta1_ * e);          // [修正] -beta1_*e 改为 +beta1_*e
+  z_(1) = z2 + dt_ * (z3 + b0_ * u + beta2_ * e); // [修正] -beta2_*e 改为 +beta2_*e
+  z_(2) = z3 + dt_ * (beta3_ * e);            // [修正] -beta3_*e 改为 +beta3_*e
 }
 // --- 修正结束 ---
 
@@ -68,6 +75,7 @@ std::vector<double> LESO::getStates() const
 void LESO::updateMatrices()
 {
   // Observer gain using Butterworth pole placement
+  // (s + omega_o)^3 = s^3 + 3*omega_o*s^2 + 3*omega_o^2*s + omega_o^3
   beta1_ = 3.0 * omega_o_;
   beta2_ = 3.0 * omega_o_ * omega_o_;
   beta3_ = omega_o_ * omega_o_ * omega_o_;
