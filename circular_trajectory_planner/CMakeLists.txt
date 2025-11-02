@@ -11,6 +11,7 @@ find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(px4_msgs REQUIRED) # <--- 新增的依赖项
 
 # Circular trajectory planner node
 add_executable(circular_trajectory_planner_node
@@ -22,6 +23,7 @@ ament_target_dependencies(circular_trajectory_planner_node
   geometry_msgs
   nav_msgs
   visualization_msgs
+  px4_msgs # <--- 新增的依赖项
 )
 
 # Install
