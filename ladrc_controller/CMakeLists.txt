@@ -12,9 +12,11 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(px4_msgs REQUIRED)
+find_package(Eigen3 REQUIRED)
 
 # Include directories
 include_directories(include)
+include_directories(${EIGEN3_INCLUDE_DIRS})
 
 # LADRC Library
 add_library(ladrc_lib

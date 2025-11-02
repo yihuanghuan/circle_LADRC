@@ -37,17 +37,15 @@ public:
 
     dt_ = 1.0 / publish_rate;
 
-    // --- 新增：自主起飞状态 ---
+    // --- 自主起飞状态 ---
     flight_state_ = FlightState::INIT;
     offboard_setpoint_counter_ = 0;
 
-    // --- 新增：PX4 指令发布者 ---
-    offboard_control_mode_pub_ = this->create_publisher<px4_msgs::msg::OffboardControlMode>(
-      "/fmu/in/offboard_control_mode", 10);
+    // --- PX4 指令发布者 ---
     vehicle_command_pub_ = this->create_publisher<px4_msgs::msg::VehicleCommand>(
       "/fmu/in/vehicle_command", 10);
 
-    // --- 修改：参考位姿发布者 ---
+    // --- 参考位姿发布者 ---
     reference_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
       "/reference_pose", 10);
     
@@ -58,14 +56,12 @@ public:
         "/trajectory_marker", 10);
     }
 
-    // --- 修改：分离两个定时器 ---
-    // 轨迹发布定时器（高频）
+    // --- 分离两个定时器 ---
     auto trajectory_timer_period = std::chrono::duration<double>(dt_);
     trajectory_timer_ = this->create_wall_timer(
       trajectory_timer_period,
       std::bind(&CircularTrajectoryPlannerNode::publishTrajectory, this));
 
-    // 状态机与指令定时器（低频）
     auto command_timer_period = std::chrono::milliseconds(100); // 10 Hz
     command_timer_ = this->create_wall_timer(
       command_timer_period,
@@ -73,11 +69,9 @@ public:
 
 
     if (visualize_) {
-      // 延迟发布可视化，等待RVIZ启动
       auto viz_timer = this->create_wall_timer(5s, [this]() -> void {
         publishPathVisualization();
         publishCircleMarker();
-        // 运行一次后停止
         this->viz_timer_->cancel();
       });
       viz_timer_ = viz_timer;
@@ -90,12 +84,10 @@ public:
   }
 
 private:
-  // --- 新增：飞行状态机 ---
+  // --- 飞行状态机 (已修改) ---
   enum class FlightState {
     INIT,
-    WAITING_FOR_STABLE,
     ARMING,
-    TAKEOFF,
     SETTING_OFFBOARD,
     RUNNING_TRAJECTORY
   };
@@ -104,14 +96,13 @@ private:
   rclcpp::TimerBase::SharedPtr command_timer_;
   rclcpp::TimerBase::SharedPtr viz_timer_;
 
-  // --- 新增：指令发布函数 ---
   void publishVehicleCommand(uint16_t command, float param1 = 0.0, float param2 = 0.0, float param7 = 0.0)
   {
     px4_msgs::msg::VehicleCommand msg{};
     msg.command = command;
     msg.param1 = param1;
     msg.param2 = param2;
-    msg.param7 = param7; // param7 for altitude in takeoff
+    msg.param7 = param7;
     msg.target_system = 1;
     msg.target_component = 1;
     msg.source_system = 1;
@@ -121,28 +112,11 @@ private:
     vehicle_command_pub_->publish(msg);
   }
 
-  void publishOffboardControlMode()
-  {
-    px4_msgs::msg::OffboardControlMode msg{};
-    msg.position = true; // 我们将发送位置/速度/加速度指令
-    msg.velocity = false;
-    msg.acceleration = false;
-    msg.attitude = false;
-    msg.body_rate = false;
-    msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
-    offboard_control_mode_pub_->publish(msg);
-  }
-
-  // --- 新增：状态机 ---
   void stateMachine()
   {
-    // 持续发布Offboard控制模式，这是PX4进入Offboard模式的先决条件
-    publishOffboardControlMode();
-
     switch (flight_state_.load()) {
       case FlightState::INIT:
-        // 等待10秒，让Gazebo和控制器节点稳定
-        if (++offboard_setpoint_counter_ * 100 > 10000) { // 100ms * 100 = 10s
+        if (++offboard_setpoint_counter_ * 100 > 10000) { 
           RCLCPP_INFO(this->get_logger(), "系统稳定，开始解锁 (Arming)...");
           publishVehicleCommand(px4_msgs::msg::VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, 1.0);
           flight_state_ = FlightState::ARMING;
@@ -151,73 +125,51 @@ private:
         break;
 
       case FlightState::ARMING:
-        // 等待2秒
         if (++offboard_setpoint_counter_ * 100 > 2000) {
-          RCLCPP_INFO(this->get_logger(), "发送起飞指令 (Takeoff)至 %.2f 米...", center_z_);
-          // 注意：PX4的CMD_NAV_TAKEOFF使用NED坐标系下的高度，但此处param7似乎是相对高度
-          // 为简单起见，我们使用LADRC控制器期望的ENU高度
-          // 我们只发送起飞指令，LADRC控制器将处理悬停
-          publishVehicleCommand(px4_msgs::msg::VehicleCommand::VEHICLE_CMD_NAV_TAKEOFF, 0.0, 0.0, center_z_);
-          flight_state_ = FlightState::TAKEOFF;
-          offboard_setpoint_counter_ = 0;
-        }
-        break;
-
-      case FlightState::TAKEOFF:
-        // 等待15秒让无人机起飞并稳定在悬停点
-        if (++offboard_setpoint_counter_ * 100 > 15000) {
-          RCLCPP_INFO(this->get_logger(), "切换到 Offboard 模式...");
-          publishVehicleCommand(px4_msgs::msg::VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1.0, 6.0); // 6.0 = MAV_MODE_OFFBOARD
+          RCLCPP_INFO(this->get_logger(), "解锁成功。切换到 Offboard 模式...");
+          publishVehicleCommand(px4_msgs::msg::VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1.0, 6.0); 
           flight_state_ = FlightState::SETTING_OFFBOARD;
           offboard_setpoint_counter_ = 0;
         }
         break;
 
       case FlightState::SETTING_OFFBOARD:
-        // 等待1秒确保模式切换成功
          if (++offboard_setpoint_counter_ * 100 > 1000) {
-          RCLCPP_INFO(this->get_logger(), "Offboard 模式已激活。开始执行圆形轨迹。");
+          RCLCPP_INFO(this->get_logger(), "Offboard 模式已激活。LADRC 控制器接管起飞...");
           flight_state_ = FlightState::RUNNING_TRAJECTORY;
          }
         break;
       
       case FlightState::RUNNING_TRAJECTORY:
-        // 状态机任务完成，轨迹将在 publishTrajectory() 中运行
-        // 我们可以停止这个定时器以节省资源
         command_timer_->cancel();
         break;
     }
   }
 
-
-  // --- 修改：轨迹发布函数 ---
   void publishTrajectory()
   {
     geometry_msgs::msg::PoseStamped reference_pose;
     reference_pose.header.stamp = this->get_clock()->now();
-    reference_pose.header.frame_id = "map"; // 假设使用 ENU "map" 坐标系
+    reference_pose.header.frame_id = "map"; 
 
     double theta = 0.0;
     double current_yaw = 0.0;
 
     if (flight_state_.load() == FlightState::RUNNING_TRAJECTORY) {
-      // 只有在进入轨迹运行状态后才开始增加时间
       theta = angular_vel_ * time_;
       time_ += dt_;
-      current_yaw = theta + M_PI / 2.0; // 偏航角切向圆周
+      current_yaw = theta + M_PI / 2.0;
       
       reference_pose.pose.position.x = center_x_ + radius_ * std::cos(theta);
       reference_pose.pose.position.y = center_y_ + radius_ * std::sin(theta);
     } else {
-      // 在起飞和切换模式期间，保持在起始点悬停
       reference_pose.pose.position.x = center_x_;
       reference_pose.pose.position.y = center_y_;
-      current_yaw = M_PI / 2.0; // 保持朝向（例如，Y轴正方向）
+      current_yaw = M_PI / 2.0; 
     }
     
-    reference_pose.pose.position.z = center_z_; // 高度始终由参数控制
+    reference_pose.pose.position.z = center_z_; 
 
-    // Convert yaw to quaternion (simplified for yaw-only rotation)
     reference_pose.pose.orientation.x = 0.0;
     reference_pose.pose.orientation.y = 0.0;
     reference_pose.pose.orientation.z = std::sin(current_yaw / 2.0);
@@ -226,7 +178,6 @@ private:
     reference_pub_->publish(reference_pose);
   }
 
-  // --- 可视化函数 (无修改) ---
   void publishPathVisualization()
   {
     nav_msgs::msg::Path path;
@@ -271,14 +222,11 @@ private:
     marker_pub_->publish(marker);
   }
 
-  // --- 成员变量 ---
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr reference_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr marker_pub_;
   rclcpp::TimerBase::SharedPtr trajectory_timer_;
 
-  // --- 新增的成员变量 ---
-  rclcpp::Publisher<px4_msgs::msg::OffboardControlMode>::SharedPtr offboard_control_mode_pub_;
   rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr vehicle_command_pub_;
 
   double center_x_, center_y_, center_z_;
