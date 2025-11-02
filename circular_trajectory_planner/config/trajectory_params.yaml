@@ -1,0 +1,19 @@
+circular_trajectory_planner:
+  ros__parameters:
+    # Circle center position (meters)
+    center_x: 0.0
+    center_y: 0.0
+    center_z: 2.0
+    
+    # Circle radius (meters)
+    radius: 5.0
+    
+    # Angular velocity (rad/s)
+    # 0.5 rad/s ≈ one circle in ~12.5 seconds
+    angular_velocity: 0.5
+    
+    # Publishing rate (Hz)
+    publish_rate: 50.0
+    
+    # Visualization
+    visualize: true
