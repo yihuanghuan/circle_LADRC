@@ -4,20 +4,22 @@ ladrc_position_controller:
     control_frequency: 50.0
     
     # X-axis LADRC parameters
-    omega_o_x: 15.0      # Observer bandwidth
-    omega_c_x: 8.0       # Controller bandwidth
+    omega_o_x: 3.0      # Observer bandwidth
+    omega_c_x: 0.6       # Controller bandwidth
     b0_x: 1.0            # Control gain estimate
     
     # Y-axis LADRC parameters
-    omega_o_y: 15.0
-    omega_c_y: 8.0
+    omega_o_y: 3.0
+    omega_c_y: 0.6
     b0_y: 1.0
     
     # Z-axis LADRC parameters
-    omega_o_z: 15.0
-    omega_c_z: 8.0
+    omega_o_z: 10.0
+    omega_c_z: 2.0
     b0_z: 1.0
     
     # Limits
     max_velocity: 5.0          # m/s
+    max_acceleration_x: 3.0    # m/s^2
+    max_acceleration_y: 3.0    # m/s^2
     max_acceleration_z: 3.0    # m/s^2

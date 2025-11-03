@@ -25,6 +25,7 @@ public:
     this->declare_parameter("angular_velocity", 0.5);  // rad/s
     this->declare_parameter("publish_rate", 50.0);      // Hz
     this->declare_parameter("visualize", true);
+    this->declare_parameter("transition_duration", 5.0); // <-- [新增] 过渡时间
 
     // 获取参数
     center_x_ = this->get_parameter("center_x").as_double();
@@ -34,12 +35,14 @@ public:
     angular_vel_ = this->get_parameter("angular_velocity").as_double();
     double publish_rate = this->get_parameter("publish_rate").as_double();
     visualize_ = this->get_parameter("visualize").as_bool();
+    transition_duration_ = this->get_parameter("transition_duration").as_double(); // <-- [新增]
 
     dt_ = 1.0 / publish_rate;
 
     // --- 自主起飞状态 ---
     flight_state_ = FlightState::INIT;
     offboard_setpoint_counter_ = 0;
+    transition_start_time_ = 0.0; // <-- [新增]
 
     // --- PX4 指令发布者 ---
     vehicle_command_pub_ = this->create_publisher<px4_msgs::msg::VehicleCommand>(
@@ -80,6 +83,7 @@ public:
     RCLCPP_INFO(this->get_logger(), 
       "轨迹规划器已初始化: center=[%.2f, %.2f, %.2f], radius=%.2f, omega=%.2f rad/s",
       center_x_, center_y_, center_z_, radius_, angular_vel_);
+    RCLCPP_INFO(this->get_logger(), "过渡时间: %.2f 秒", transition_duration_);
     RCLCPP_INFO(this->get_logger(), "等待系统稳定... 将在10秒后开始执行自主起飞序列。");
   }
 
@@ -89,6 +93,7 @@ private:
     INIT,
     ARMING,
     SETTING_OFFBOARD,
+    TRANSITION_TO_CIRCLE, // <-- [新增] 过渡状态
     RUNNING_TRAJECTORY
   };
   std::atomic<FlightState> flight_state_;
@@ -135,17 +140,21 @@ private:
 
       case FlightState::SETTING_OFFBOARD:
          if (++offboard_setpoint_counter_ * 100 > 1000) {
-          RCLCPP_INFO(this->get_logger(), "Offboard 模式已激活。LADRC 控制器接管起飞...");
-          flight_state_ = FlightState::RUNNING_TRAJECTORY;
+          RCLCPP_INFO(this->get_logger(), "Offboard 模式已激活。开始从中心过渡到圆周...");
+          flight_state_ = FlightState::TRANSITION_TO_CIRCLE; // <-- [修改] 切换到过渡状态
+          transition_start_time_ = this->get_clock()->now().seconds(); // <-- [新增] 记录过渡开始时间
+          command_timer_->cancel(); // <-- [修改] 状态机完成任务，停止
          }
         break;
       
+      case FlightState::TRANSITION_TO_CIRCLE: // <-- [修改] 状态机不再需要处理这些
       case FlightState::RUNNING_TRAJECTORY:
         command_timer_->cancel();
         break;
     }
   }
 
+  // --- [核心修改] ---
   void publishTrajectory()
   {
     geometry_msgs::msg::PoseStamped reference_pose;
@@ -154,22 +163,52 @@ private:
 
     double theta = 0.0;
     double current_yaw = 0.0;
+    double current_radius = 0.0; // <-- [新增] 动态半径
 
-    if (flight_state_.load() == FlightState::RUNNING_TRAJECTORY) {
+    FlightState current_state = flight_state_.load();
+    double current_time_seconds = this->get_clock()->now().seconds();
+
+    if (current_state == FlightState::TRANSITION_TO_CIRCLE) {
+      double time_elapsed = current_time_seconds - transition_start_time_;
+
+      if (time_elapsed < transition_duration_) {
+        // --- 正在过渡 ---
+        // 半径从 0 线性增加到 radius_
+        current_radius = radius_ * (time_elapsed / transition_duration_);
+        theta = 0.0; // 在过渡期间，我们沿着X轴正向移动
+        current_yaw = M_PI / 2.0; // 保持朝向Y轴正向 (或圆的切线方向)
+      } else {
+        // --- 过渡完成 ---
+        RCLCPP_INFO_ONCE(this->get_logger(), "过渡完成。开始执行圆形轨迹。");
+        flight_state_ = FlightState::RUNNING_TRAJECTORY;
+        time_ = 0.0; // 重置圆形轨迹的计时器
+        
+        current_radius = radius_;
+        theta = 0.0;
+        current_yaw = M_PI / 2.0;
+      }
+    }
+    else if (current_state == FlightState::RUNNING_TRAJECTORY) {
+      // --- 正在运行圆形轨迹 ---
       theta = angular_vel_ * time_;
       time_ += dt_;
-      current_yaw = theta + M_PI / 2.0;
-      
-      reference_pose.pose.position.x = center_x_ + radius_ * std::cos(theta);
-      reference_pose.pose.position.y = center_y_ + radius_ * std::sin(theta);
-    } else {
-      reference_pose.pose.position.x = center_x_;
-      reference_pose.pose.position.y = center_y_;
+      current_yaw = theta + M_PI / 2.0; // 偏航角始终指向圆的切线方向
+      current_radius = radius_;
+    } 
+    else {
+      // --- INIT, ARMING, SETTING_OFFBOARD 状态 ---
+      // 保持在圆心 (悬停点)
+      current_radius = 0.0; 
+      theta = 0.0;
       current_yaw = M_PI / 2.0; 
     }
     
+    // --- 根据计算出的动态半径和角度设置目标点 ---
+    reference_pose.pose.position.x = center_x_ + current_radius * std::cos(theta);
+    reference_pose.pose.position.y = center_y_ + current_radius * std::sin(theta);
     reference_pose.pose.position.z = center_z_; 
 
+    // 设置姿态
     reference_pose.pose.orientation.x = 0.0;
     reference_pose.pose.orientation.y = 0.0;
     reference_pose.pose.orientation.z = std::sin(current_yaw / 2.0);
@@ -177,6 +216,7 @@ private:
 
     reference_pub_->publish(reference_pose);
   }
+  // --- [核心修改结束] ---
 
   void publishPathVisualization()
   {
@@ -235,6 +275,10 @@ private:
   double dt_;
   double time_;
   bool visualize_;
+
+  // --- [新增成员变量] ---
+  double transition_duration_; // 过渡时间 (秒)
+  double transition_start_time_; // 过渡开始的绝对时间 (秒)
 };
 
 int main(int argc, char** argv)
