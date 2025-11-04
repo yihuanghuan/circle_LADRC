@@ -1,25 +1,23 @@
-ladrc_position_controller:
+circular_trajectory_planner:
   ros__parameters:
-    # Control frequency (Hz)
-    control_frequency: 50.0
+    # Circle center position (meters)
+    center_x: 0.0
+    center_y: 0.0
+    center_z: 2.0
     
-    # X-axis LADRC parameters
-    omega_o_x: 3.0      # Observer bandwidth
-    omega_c_x: 0.6       # Controller bandwidth
-    b0_x: 1.0            # Control gain estimate
+    # Circle radius (meters)
+    radius: 5.0
     
-    # Y-axis LADRC parameters
-    omega_o_y: 3.0
-    omega_c_y: 0.6
-    b0_y: 1.0
+    # Angular velocity (rad/s)
+    # 0.5 rad/s ≈ one circle in ~12.5 seconds
+    angular_velocity: 0.2
     
-    # Z-axis LADRC parameters
-    omega_o_z: 10.0
-    omega_c_z: 2.0
-    b0_z: 1.0
+    # Publishing rate (Hz)
+    publish_rate: 50.0
+
+    # --- [新增] ---
+    # Smooth transition duration from center to circle edge (seconds)
+    transition_duration: 10.0 
     
-    # Limits
-    max_velocity: 5.0          # m/s
-    max_acceleration_x: 3.0    # m/s^2
-    max_acceleration_y: 3.0    # m/s^2
-    max_acceleration_z: 3.0    # m/s^2
+    # Visualization
+    visualize: true
